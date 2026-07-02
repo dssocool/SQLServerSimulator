@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SqlServerSimulator/SqlServerSimulator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlServerSimulator.Tests/SqlServerSimulator.Tests.csproj" />
+  </Folder>
+</Solution>
