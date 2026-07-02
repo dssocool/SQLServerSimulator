@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using SqlServerSimulator.Mapping;
 using SqlServerSimulator.Tds;
 
@@ -9,12 +10,14 @@ public sealed class SimulatorServer : IAsyncDisposable
 {
     private readonly TcpListener _listener;
     private readonly MappingStore _mappings;
+    private readonly X509Certificate2 _certificate;
     private readonly CancellationTokenSource _cts = new();
     private Task? _acceptLoop;
 
     public SimulatorServer(MappingStore mappings, int port)
     {
         _mappings = mappings;
+        _certificate = TlsCertificate.CreateSelfSigned();
         _listener = new TcpListener(IPAddress.Loopback, port);
     }
 
@@ -47,7 +50,7 @@ public sealed class SimulatorServer : IAsyncDisposable
             try
             {
                 client.NoDelay = true;
-                var session = new TdsSession(client.GetStream(), _mappings);
+                var session = new TdsSession(client.GetStream(), _mappings, _certificate);
                 await session.RunAsync(ct);
             }
             catch (Exception ex) when (ex is IOException or EndOfStreamException or OperationCanceledException)
@@ -70,5 +73,6 @@ public sealed class SimulatorServer : IAsyncDisposable
             try { await _acceptLoop; } catch { }
         }
         _cts.Dispose();
+        _certificate.Dispose();
     }
 }

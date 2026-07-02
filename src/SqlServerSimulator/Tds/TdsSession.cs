@@ -1,3 +1,6 @@
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using SqlServerSimulator.Mapping;
 
@@ -6,13 +9,15 @@ namespace SqlServerSimulator.Tds;
 /// <summary>Handles one client connection: PRELOGIN, LOGIN7 (always succeeds), then SQL batches.</summary>
 public sealed class TdsSession
 {
-    private readonly Stream _stream;
+    private Stream _stream;
     private readonly MappingStore _mappings;
+    private readonly X509Certificate2? _certificate;
 
-    public TdsSession(Stream stream, MappingStore mappings)
+    public TdsSession(Stream stream, MappingStore mappings, X509Certificate2? certificate = null)
     {
         _stream = stream;
         _mappings = mappings;
+        _certificate = certificate;
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -25,7 +30,7 @@ public sealed class TdsSession
             switch (message.Type)
             {
                 case TdsPacketType.PreLogin:
-                    await SendPreLoginResponseAsync(ct);
+                    await HandlePreLoginAsync(message.Payload, ct);
                     break;
                 case TdsPacketType.Login7:
                     await SendLoginSuccessAsync(ct);
@@ -46,13 +51,63 @@ public sealed class TdsSession
         }
     }
 
-    private async Task SendPreLoginResponseAsync(CancellationToken ct)
+    private const byte EncryptOff = 0x00;
+    private const byte EncryptOn = 0x01;
+    private const byte EncryptNotSup = 0x02;
+    private const byte EncryptReq = 0x03;
+
+    private async Task HandlePreLoginAsync(byte[] payload, CancellationToken ct)
+    {
+        var clientEncryption = ParseEncryptionOption(payload);
+
+        // Clients that don't want encryption (Encrypt=False) get ENCRYPT_NOT_SUP and a
+        // fully plaintext session; clients asking for encryption get ENCRYPT_ON and a
+        // TLS handshake (if we have a certificate).
+        var wantsTls = _certificate is not null && clientEncryption is EncryptOn or EncryptReq;
+        await SendPreLoginResponseAsync(wantsTls ? EncryptOn : EncryptNotSup, ct);
+
+        if (wantsTls)
+        {
+            // The TLS handshake records are wrapped in PRELOGIN packets (TDS spec);
+            // after the handshake, TDS flows directly over the TLS stream.
+            var framed = new PreLoginFramedStream(_stream);
+            var ssl = new SslStream(framed, leaveInnerStreamOpen: true);
+            await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            {
+                ServerCertificate = _certificate,
+                // TDS 7.x PRELOGIN-negotiated encryption only supports up to TLS 1.2
+                // (TLS 1.3 is reserved for TDS 8.0 strict mode).
+                EnabledSslProtocols = SslProtocols.Tls12,
+                ClientCertificateRequired = false,
+            }, ct);
+            framed.HandshakeComplete = true;
+            _stream = ssl;
+        }
+    }
+
+    /// <summary>Reads the ENCRYPTION option (token 0x01) from the client's PRELOGIN payload.</summary>
+    private static byte ParseEncryptionOption(byte[] payload)
+    {
+        var pos = 0;
+        while (pos + 5 <= payload.Length && payload[pos] != 0xFF)
+        {
+            var token = payload[pos];
+            var offset = (payload[pos + 1] << 8) | payload[pos + 2];
+            var length = (payload[pos + 3] << 8) | payload[pos + 4];
+            if (token == 0x01 && length >= 1 && offset < payload.Length)
+                return payload[offset];
+            pos += 5;
+        }
+        return EncryptNotSup;
+    }
+
+    private async Task SendPreLoginResponseAsync(byte encryption, CancellationToken ct)
     {
         // Options: VERSION, ENCRYPTION, INSTANCE, THREADID, MARS, terminator.
         var options = new (byte Token, byte[] Data)[]
         {
             (0x00, new byte[] { 12, 0, 0, 0, 0, 0 }),  // version 12.0.0.0
-            (0x01, new byte[] { 0x02 }),                // ENCRYPT_NOT_SUP
+            (0x01, new byte[] { encryption }),
             (0x02, new byte[] { 0x00 }),                // instance ack
             (0x03, new byte[] { 0, 0, 0, 0 }),          // thread id
             (0x04, new byte[] { 0x00 }),                // MARS off

@@ -98,6 +98,23 @@ public sealed class SimulatorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Encrypted_Connection_Returns_Mapped_ResultSet()
+    {
+        var cs = $"Server=127.0.0.1,{_server.Port};User Id=anyone;Password=whatever;" +
+                 "Encrypt=True;TrustServerCertificate=True;Connect Timeout=15";
+        await using var connection = new SqlConnection(cs);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand("SELECT Id, Name, Price FROM Products", connection);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.Equal(3, reader.FieldCount);
+        var rows = 0;
+        while (await reader.ReadAsync()) rows++;
+        Assert.Equal(4, rows);
+    }
+
+    [Fact]
     public async Task PowerBi_Version_Probe_Returns_Builtin_Result()
     {
         await using var connection = new SqlConnection(ConnectionString);

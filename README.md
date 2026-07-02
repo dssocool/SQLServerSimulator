@@ -3,7 +3,7 @@
 A minimal TDS-protocol server (.NET 10) that looks like a real SQL Server to clients such as `Microsoft.Data.SqlClient`. It does not execute SQL; it maps incoming statements (exact match, after normalization) to static result sets loaded from CSV files. Before comparison, both the configured and the incoming statement are normalized: every run of whitespace (spaces, tabs, newlines) is collapsed to a single space, leading/trailing whitespace is trimmed, and matching is case-insensitive. Note that whitespace inside string literals is normalized too.
 
 - Any login succeeds, regardless of credentials.
-- Encryption is not supported: clients must connect with `Encrypt=False`.
+- Encrypted connections are supported via a self-signed certificate generated at startup: connect with `Encrypt=True;TrustServerCertificate=True` (or `Encrypt=False` for plaintext).
 - Unmapped statements return a SQL error (number 50000).
 - Built-in handling for common client housekeeping (no mapping needed):
   - Power BI / Power Query connection probe (`SELECT @@version _VERSION, ...`) and plain `SELECT @@version` queries.
@@ -23,8 +23,10 @@ Defaults: `mappings/mappings.json` (copied next to the binary) and port `11433`.
 Example connection string:
 
 ```
-Server=127.0.0.1,11433;User Id=anyone;Password=whatever;Encrypt=False
+Server=127.0.0.1,11433;User Id=anyone;Password=whatever;Encrypt=True;TrustServerCertificate=True
 ```
+
+`Encrypt=False` also works (the session then runs in plaintext). `TrustServerCertificate=True` is required with encryption because the server certificate is self-signed.
 
 ## Mapping config
 
@@ -76,7 +78,7 @@ Instead of `statement` (exact match), a mapping can use `statementPattern`: a .N
 
 ## Power BI Desktop
 
-Connect with the built-in SQL Server connector: server `127.0.0.1,11433`, database anything, and under connection settings disable encryption (or ignore the encryption warning). The connection probe is answered by the built-in handler; the navigator's table-listing queries can be served with `statementPattern` mappings (a sample matching `INFORMATION_SCHEMA.TABLES` is included). The simulator logs every incoming statement to the console (`[batch]`/`[rpc]` lines), so if Power BI reports an unmapped statement, copy it from the console into a new mapping.
+Connect with the built-in SQL Server connector: server `127.0.0.1,11433`, database anything. Encrypted connections work (accept the certificate warning for the self-signed certificate), or disable encryption under connection settings. The connection probe is answered by the built-in handler; the navigator's table-listing queries can be served with `statementPattern` mappings (a sample matching `INFORMATION_SCHEMA.TABLES` is included). The simulator logs every incoming statement to the console (`[batch]`/`[rpc]` lines), so if Power BI reports an unmapped statement, copy it from the console into a new mapping.
 
 ## Test
 
