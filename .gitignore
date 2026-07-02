@@ -63,3 +63,5 @@ $RECYCLE.BIN/
 !.env.example
 appsettings.Development.json
 secrets.json
+
+.build-test

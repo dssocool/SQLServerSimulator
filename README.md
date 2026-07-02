@@ -15,10 +15,10 @@ A minimal TDS-protocol server (.NET 10) that looks like a real SQL Server to cli
 ## Run
 
 ```bash
-dotnet run --project src/SqlServerSimulator [path/to/mappings.json] [port]
+dotnet run --project src/SqlServerSimulator [path/to/mappings.json] [port] [bindAddress]
 ```
 
-Defaults: `mappings/mappings.json` (copied next to the binary) and port `11433`.
+Defaults: `mappings/mappings.json` (copied next to the binary), port `11433`, and bind address `0.0.0.0` (all network interfaces). Use `127.0.0.1` as the bind address to accept only local connections.
 
 Example connection string:
 

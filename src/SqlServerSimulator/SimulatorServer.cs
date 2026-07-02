@@ -14,12 +14,15 @@ public sealed class SimulatorServer : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private Task? _acceptLoop;
 
-    public SimulatorServer(MappingStore mappings, int port)
+    public SimulatorServer(MappingStore mappings, int port, IPAddress? bindAddress = null)
     {
         _mappings = mappings;
+        BindAddress = bindAddress ?? IPAddress.Any;
         _certificate = TlsCertificate.CreateSelfSigned();
-        _listener = new TcpListener(IPAddress.Loopback, port);
+        _listener = new TcpListener(BindAddress, port);
     }
+
+    public IPAddress BindAddress { get; }
 
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
@@ -27,7 +30,8 @@ public sealed class SimulatorServer : IAsyncDisposable
     {
         _listener.Start();
         _acceptLoop = AcceptLoopAsync(_cts.Token);
-        Console.WriteLine($"SQL Server Simulator listening on 127.0.0.1:{Port}");
+        var bindLabel = BindAddress.Equals(IPAddress.Any) ? "0.0.0.0 (all interfaces)" : BindAddress.ToString();
+        Console.WriteLine($"SQL Server Simulator listening on {bindLabel}:{Port}");
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)

@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
@@ -18,7 +21,8 @@ public static class TlsCertificate
             new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") /* server auth */ }, critical: false));
         var sanBuilder = new SubjectAlternativeNameBuilder();
         sanBuilder.AddDnsName("localhost");
-        sanBuilder.AddIpAddress(System.Net.IPAddress.Loopback);
+        foreach (var address in GetLocalIpAddresses())
+            sanBuilder.AddIpAddress(address);
         request.CertificateExtensions.Add(sanBuilder.Build());
 
         using var ephemeral = request.CreateSelfSigned(
@@ -29,5 +33,28 @@ public static class TlsCertificate
         return X509CertificateLoader.LoadPkcs12(
             ephemeral.Export(X509ContentType.Pfx), password: null,
             X509KeyStorageFlags.Exportable);
+    }
+
+    private static IEnumerable<IPAddress> GetLocalIpAddresses()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up)
+                continue;
+
+            foreach (var address in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (address.Address.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
+                    continue;
+                if (address.Address.IsIPv6LinkLocal)
+                    continue;
+                if (seen.Add(address.Address.ToString()))
+                    yield return address.Address;
+            }
+        }
+
+        if (seen.Add(IPAddress.Loopback.ToString()))
+            yield return IPAddress.Loopback;
     }
 }
