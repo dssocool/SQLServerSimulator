@@ -3,7 +3,7 @@
 A minimal TDS-protocol server (.NET 10) that looks like a real SQL Server to clients such as `Microsoft.Data.SqlClient`. It does not execute SQL; it maps incoming statements (exact match, after normalization) to static result sets loaded from CSV files. Before comparison, both the configured and the incoming statement are normalized: every run of whitespace (spaces, tabs, newlines) is collapsed to a single space, leading/trailing whitespace is trimmed, and matching is case-insensitive. Note that whitespace inside string literals is normalized too.
 
 - Any login succeeds, regardless of credentials.
-- Encrypted connections are supported via a self-signed certificate generated at startup: connect with `Encrypt=True;TrustServerCertificate=True` (or `Encrypt=False` for plaintext).
+- Encrypted connections are supported via a self-signed certificate that is generated on first start and persisted next to the binary (`simulator-tls.pfx` for the server, `simulator-tls.cer` public part for clients): connect with `Encrypt=True;TrustServerCertificate=True` (or `Encrypt=False` for plaintext). Clients that fully validate the certificate must have `simulator-tls.cer` installed as a trusted root (see the Power BI section).
 - Unmapped statements return a SQL error (number 50000).
 - Built-in handling for common client housekeeping (no mapping needed):
   - Power BI / Power Query connection probe (`SELECT @@version _VERSION, ...`) and plain `SELECT @@version` queries.
@@ -78,7 +78,15 @@ Instead of `statement` (exact match), a mapping can use `statementPattern`: a .N
 
 ## Power BI Desktop
 
-Connect with the built-in SQL Server connector: server `127.0.0.1,11433`, database anything. Encrypted connections work (accept the certificate warning for the self-signed certificate), or disable encryption under connection settings. The connection probe is answered by the built-in handler; the navigator's table-listing queries can be served with `statementPattern` mappings (a sample matching `INFORMATION_SCHEMA.TABLES` is included). The simulator logs every incoming statement to the console (`[batch]`/`[rpc]` lines), so if Power BI reports an unmapped statement, copy it from the console into a new mapping.
+Connect with the built-in SQL Server connector: server `localhost,11433`, database anything.
+
+With **Use encrypted connection** disabled, no setup is needed. With it enabled, Power BI validates the server certificate against the Windows trusted root store, so the simulator's self-signed certificate must be installed first:
+
+1. Start the simulator once; it prints the path of `simulator-tls.cer` (next to the binary).
+2. Double-click the `.cer` file → Install Certificate → Current User → "Place all certificates in the following store" → **Trusted Root Certification Authorities**.
+3. In Power BI, connect using `localhost,11433` (the certificate is issued to `localhost` and the machine's IP addresses; a plain hostname that isn't in the certificate will fail name validation).
+
+The certificate is reused across restarts, so this is a one-time step. If you delete `simulator-tls.pfx`, a new certificate is generated and must be re-installed. The connection probe is answered by the built-in handler; the navigator's table-listing queries can be served with `statementPattern` mappings (a sample matching `INFORMATION_SCHEMA.TABLES` is included). The simulator logs every incoming statement to the console (`[batch]`/`[rpc]` lines), so if Power BI reports an unmapped statement, copy it from the console into a new mapping.
 
 ## Test
 

@@ -18,7 +18,7 @@ public sealed class SimulatorServer : IAsyncDisposable
     {
         _mappings = mappings;
         BindAddress = bindAddress ?? IPAddress.Any;
-        _certificate = TlsCertificate.CreateSelfSigned();
+        _certificate = TlsCertificate.LoadOrCreatePersisted(AppContext.BaseDirectory);
         _listener = new TcpListener(BindAddress, port);
     }
 
@@ -32,6 +32,9 @@ public sealed class SimulatorServer : IAsyncDisposable
         _acceptLoop = AcceptLoopAsync(_cts.Token);
         var bindLabel = BindAddress.Equals(IPAddress.Any) ? "0.0.0.0 (all interfaces)" : BindAddress.ToString();
         Console.WriteLine($"SQL Server Simulator listening on {bindLabel}:{Port}");
+        Console.WriteLine($"TLS certificate (public part): {Path.Combine(AppContext.BaseDirectory, "simulator-tls.cer")}");
+        Console.WriteLine("For clients that validate the certificate (e.g. Power BI 'Use encrypted connection'),");
+        Console.WriteLine("install that .cer into 'Trusted Root Certification Authorities' and connect using 'localhost,<port>'.");
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)

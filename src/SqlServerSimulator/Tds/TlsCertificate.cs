@@ -9,6 +9,39 @@ namespace SqlServerSimulator.Tds;
 /// <summary>Creates the self-signed server certificate used for TLS-encrypted connections.</summary>
 public static class TlsCertificate
 {
+    /// <summary>
+    /// Loads the persisted certificate from disk, or creates a new self-signed one and
+    /// persists it (PFX with private key for the server, plus a public .cer for clients
+    /// to install into their trusted root store, e.g. for Power BI Desktop's
+    /// "Use encrypted connection" which does full certificate validation).
+    /// </summary>
+    public static X509Certificate2 LoadOrCreatePersisted(string directory)
+    {
+        var pfxPath = Path.Combine(directory, "simulator-tls.pfx");
+        var cerPath = Path.Combine(directory, "simulator-tls.cer");
+
+        if (File.Exists(pfxPath))
+        {
+            try
+            {
+                var existing = X509CertificateLoader.LoadPkcs12FromFile(
+                    pfxPath, password: null, X509KeyStorageFlags.Exportable);
+                if (existing.NotAfter > DateTime.Now.AddDays(1))
+                    return existing;
+                existing.Dispose();
+            }
+            catch (CryptographicException)
+            {
+                // Corrupt/unreadable file: fall through and regenerate.
+            }
+        }
+
+        var certificate = CreateSelfSigned();
+        File.WriteAllBytes(pfxPath, certificate.Export(X509ContentType.Pfx));
+        File.WriteAllBytes(cerPath, certificate.Export(X509ContentType.Cert));
+        return certificate;
+    }
+
     public static X509Certificate2 CreateSelfSigned()
     {
         using var rsa = RSA.Create(2048);
