@@ -36,20 +36,9 @@ public sealed class MappingConfig
                 exact[MappingStore.Normalize(File.ReadAllText(sqlPath))] = resultSet;
             }
             if (!string.IsNullOrEmpty(m.StatementPattern))
-                patterns.Add((CompileFullStringPattern(m.StatementPattern), resultSet));
+                patterns.Add((new Regex(m.StatementPattern, RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled), resultSet));
         }
         return new MappingStore(exact, patterns);
-    }
-
-    // Patterns must describe the whole normalized statement, not just a substring.
-    private static Regex CompileFullStringPattern(string pattern)
-    {
-        var p = pattern.Trim();
-        if (!p.StartsWith('^'))
-            p = "^" + p;
-        if (!p.EndsWith('$'))
-            p += "$";
-        return new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
     }
 }
 
