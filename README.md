@@ -67,7 +67,7 @@ Instead of writing the statement inline, a mapping can use `sqlFile`: a path (re
 }
 ```
 
-Instead of `statement` (exact match), a mapping can use `statementPattern`: a .NET regex (case-insensitive, `.` matches newlines) tried when no exact match is found. Patterns are tried in config order. `csvFile` may be omitted to return an empty result set.
+Instead of `statement` (exact match), a mapping can use `statementPattern`: a .NET regex (case-insensitive, `.` matches newlines) tried when no exact match is found. The regex must match the **entire** normalized statement (anchors are applied automatically). Patterns are tried in config order. Use `.*` in the pattern when you only need to match part of the statement. `csvFile` may be omitted to return an empty result set.
 
 ```json
 {

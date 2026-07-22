@@ -46,14 +46,14 @@
       ]
     },
     {
-      "statementPattern": "from\\s+\\[?sys\\]?\\.\\[?databases\\]?",
+      "statementPattern": ".*from\\s+\\[?sys\\]?\\.\\[?databases\\]?.*",
       "csvFile": "databases.csv",
       "columns": [
         { "name": "Name", "type": "nvarchar(128)" }
       ]
     },
     {
-      "statementPattern": "from\\s+\\[?INFORMATION_SCHEMA\\]?\\.\\[?TABLES\\]?|join\\s+\\[?sys\\]?\\.\\[?schemas\\]?",
+      "statementPattern": ".*(?:from\\s+\\[?INFORMATION_SCHEMA\\]?\\.\\[?TABLES\\]?|join\\s+\\[?sys\\]?\\.\\[?schemas\\]?).*",
       "csvFile": "tables.csv",
       "columns": [
         { "name": "TABLE_CATALOG", "type": "nvarchar(128)" },
