@@ -19,6 +19,33 @@
       ]
     },
     {
+      "statement": "SELECT Id, Name, Price FROM Products WHERE Id = @ProductId",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "statement": "SELECT Id, Name, Price FROM Products WHERE Id = @Id AND Name = @Name AND CreatedAt > @Since",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "statement": "SELECT Id, Name, Price FROM Products WHERE Name = N'Keyboard'",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
       "statementPattern": "from\\s+\\[?sys\\]?\\.\\[?databases\\]?",
       "csvFile": "databases.csv",
       "columns": [

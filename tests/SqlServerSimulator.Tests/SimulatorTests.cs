@@ -175,6 +175,96 @@ public sealed class SimulatorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Parameterized_Query_Matches_Mapping_By_Raw_Statement_Text()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        // Mapping is keyed on the parameterized text itself; the value should not matter.
+        await using var command = new SqlCommand("SELECT Id, Name, Price FROM Products WHERE Id = @ProductId", connection);
+        command.Parameters.AddWithValue("@ProductId", 12345);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.Equal(3, reader.FieldCount);
+        var rows = 0;
+        while (await reader.ReadAsync()) rows++;
+        Assert.Equal(4, rows);
+    }
+
+    [Fact]
+    public async Task MultiParameter_SpExecuteSql_Roundtrip()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand(
+            "SELECT Id, Name, Price FROM Products WHERE Id = @Id AND Name = @Name AND CreatedAt > @Since",
+            connection);
+        command.Parameters.AddWithValue("@Id", 7);
+        command.Parameters.AddWithValue("@Name", "Mouse");
+        command.Parameters.AddWithValue("@Since", new DateTime(2024, 1, 1, 8, 30, 0));
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.Equal(3, reader.FieldCount);
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt32(0));
+    }
+
+    [Fact]
+    public async Task Parameterized_Query_Falls_Back_To_Value_Substituted_Lookup()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        // No mapping for "... WHERE Name = @Name", but there is one for the substituted
+        // form "... WHERE Name = N'Keyboard'".
+        await using var command = new SqlCommand("SELECT Id, Name, Price FROM Products WHERE Name = @Name", connection);
+        command.Parameters.AddWithValue("@Name", "Keyboard");
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.Equal(3, reader.FieldCount);
+        Assert.True(await reader.ReadAsync());
+    }
+
+    [Fact]
+    public async Task SchemaOnly_Parameterized_Query_Returns_Columns_With_No_Rows()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        // Report Builder discovers report fields this way (SET FMTONLY ON wrapping).
+        await using var command = new SqlCommand("SELECT Id, Name, Price FROM Products WHERE Id = @ProductId", connection);
+        command.Parameters.AddWithValue("@ProductId", 1);
+        await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SchemaOnly);
+
+        Assert.Equal(3, reader.FieldCount);
+        Assert.Equal("Id", reader.GetName(0));
+        Assert.Equal("Name", reader.GetName(1));
+        Assert.Equal("Price", reader.GetName(2));
+        Assert.False(await reader.ReadAsync());
+    }
+
+    [Fact]
+    public async Task Prepared_Command_Executes_Via_SpPrepExec_And_SpExecute()
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        await using var command = new SqlCommand("SELECT Id, Name, Price FROM Products WHERE Id = @ProductId", connection);
+        var p = command.Parameters.Add("@ProductId", System.Data.SqlDbType.Int);
+        p.Value = 1;
+        command.Prepare(); // first execution goes through sp_prepexec
+
+        for (var i = 1; i <= 2; i++) // subsequent executions go through sp_execute
+        {
+            p.Value = i;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.Equal(3, reader.FieldCount);
+            Assert.True(await reader.ReadAsync());
+        }
+    }
+
+    [Fact]
     public async Task Pattern_Mapping_Matches_Information_Schema_Query()
     {
         await using var connection = new SqlConnection(ConnectionString);

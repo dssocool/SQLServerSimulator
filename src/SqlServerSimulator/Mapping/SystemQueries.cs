@@ -32,6 +32,22 @@ public static class SystemQueries
 
     private static ColumnDefinition Int(string name) => new(name, SqlTypeKind.Int, 4, 0, 0);
 
+    private static readonly Regex FmtOnlyStatement = new(
+        @"SET\s+FMTONLY\s+(ON|OFF)\s*;?\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Removes SET FMTONLY ON/OFF statements (sent by Report Builder and SqlClient's
+    /// CommandBehavior.SchemaOnly for field discovery). When "SET FMTONLY ON" was present,
+    /// schemaOnly is set and the caller should return the columns with zero rows.
+    /// </summary>
+    public static string StripFmtOnly(string sql, out bool schemaOnly)
+    {
+        schemaOnly = false;
+        if (!sql.Contains("FMTONLY", StringComparison.OrdinalIgnoreCase)) return sql;
+        schemaOnly = Regex.IsMatch(sql, @"SET\s+FMTONLY\s+ON", RegexOptions.IgnoreCase);
+        return FmtOnlyStatement.Replace(sql, "").Trim();
+    }
+
     /// <summary>Removes a leading "USE [database]" (with optional semicolon) that Power Query prepends to batches.</summary>
     public static string StripLeadingUse(string sql)
     {

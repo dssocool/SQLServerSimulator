@@ -9,7 +9,8 @@ A minimal TDS-protocol server (.NET 10) that looks like a real SQL Server to cli
   - Power BI / Power Query connection probe (`SELECT @@version _VERSION, ...`) and plain `SELECT @@version` queries.
   - Batches consisting only of `SET`/`USE` statements are acknowledged as no-ops.
   - A leading `USE [db]` in front of a batch is stripped before mapping lookup.
-  - `sp_executesql` sent via RPC: the statement text is executed through the normal mapping lookup (parameters are ignored).
+  - Parameterized queries sent via RPC (`sp_executesql`, and the prepared-statement procedures `sp_prepare`/`sp_execute`/`sp_prepexec`/`sp_unprepare`): the statement text goes through the normal mapping lookup, and parameter values are decoded (see below).
+  - Schema/field discovery: `SET FMTONLY ON` batches (used by MS Report Builder and `CommandBehavior.SchemaOnly`) return the mapped columns with zero rows, and `sp_describe_first_result_set` returns column metadata for the mapped statement.
   - Power BI / Power Query derived-table wrappers around a mapped statement, e.g. `select * from ( <statement> ) SourceQuery where 1 = 2` (schema probe, returns the columns with zero rows) and `select [cols] from ( <statement> ) as [$Table]` (returns the inner statement's full result set; the outer column projection is ignored).
 
 ## Run
@@ -75,6 +76,28 @@ Instead of `statement` (exact match), a mapping can use `statementPattern`: a .N
   "columns": [ { "name": "TABLE_NAME", "type": "nvarchar(128)" } ]
 }
 ```
+
+## Parameterized queries (MS Report Builder, SqlClient parameters)
+
+Clients like MS Report Builder send parameterized SQL (`... WHERE x = @y`) as an RPC call to `sp_executesql` (or via `sp_prepexec`/`sp_execute` for prepared commands). The simulator decodes the statement text and the parameter values, then looks up a mapping in two steps:
+
+1. **Raw text**: the parameterized statement itself, so a mapping keyed on the text with the `@parameter` names matches regardless of the values sent:
+
+```json
+{
+  "statement": "SELECT Id, Name, Price FROM Products WHERE Id = @ProductId",
+  "csvFile": "products.csv",
+  "columns": [
+    { "name": "Id", "type": "int" },
+    { "name": "Name", "type": "nvarchar(50)" },
+    { "name": "Price", "type": "decimal(10,2)" }
+  ]
+}
+```
+
+2. **Value substitution**: if no mapping matches the raw text, each `@parameter` is replaced by its SQL literal value (strings as `N'...'`, numbers plain, dates as `'yyyy-MM-dd...'`, `NULL`) and the lookup is retried. This allows value-dependent results via `statement` or `statementPattern` mappings, e.g. a mapping for `SELECT ... WHERE Name = N'Keyboard'` is hit when the client sends `WHERE Name = @Name` with `@Name = 'Keyboard'`.
+
+Report Builder's field discovery (query designer / dataset refresh) uses `SET FMTONLY ON` or `sp_describe_first_result_set`; both are answered from the mapped columns automatically. Every RPC call is logged to the console as `[rpc]` lines including the decoded parameter values, so unmapped statements can be copied from there into a new mapping.
 
 ## Power BI Desktop
 

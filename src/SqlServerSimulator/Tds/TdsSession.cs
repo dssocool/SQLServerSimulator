@@ -12,6 +12,8 @@ public sealed class TdsSession
     private Stream _stream;
     private readonly MappingStore _mappings;
     private readonly X509Certificate2? _certificate;
+    private readonly Dictionary<int, string> _preparedStatements = new();
+    private int _nextPreparedHandle = 1;
 
     public TdsSession(Stream stream, MappingStore mappings, X509Certificate2? certificate = null)
     {
@@ -189,12 +191,28 @@ public sealed class TdsSession
         await ExecuteSqlAsync(sql, ct);
     }
 
-    private async Task ExecuteSqlAsync(string sql, CancellationToken ct)
+    private async Task ExecuteSqlAsync(
+        string sql,
+        CancellationToken ct,
+        IReadOnlyDictionary<string, object?>? parameters = null,
+        Action<TdsWriter>? writeExtraTokens = null)
     {
+        // Report Builder wraps its field-discovery query in SET FMTONLY ON/OFF: return the
+        // columns of the inner statement with zero rows.
+        sql = SystemQueries.StripFmtOnly(sql, out var schemaOnly);
+        if (sql.Length == 0)
+        {
+            var done = new TdsWriter();
+            writeExtraTokens?.Invoke(done);
+            WriteDone(done, status: 0x00, rowCount: 0);
+            await TdsPacketIo.WriteMessageAsync(_stream, TdsPacketType.TabularResult, done.ToArray(), ct);
+            return;
+        }
+
         // Power Query prepends "USE [db]" to its batches; ignore it for matching.
         var effectiveSql = SystemQueries.StripLeadingUse(sql);
 
-        var resultSet = _mappings.Lookup(effectiveSql)
+        var resultSet = _mappings.Lookup(effectiveSql, parameters)
                         ?? SystemQueries.TryHandle(effectiveSql)
                         ?? (effectiveSql != sql ? SystemQueries.TryHandle(sql) : null);
         if (resultSet is null)
@@ -202,6 +220,9 @@ public sealed class TdsSession
             await SendErrorResponseAsync($"No mapping configured for statement: {sql}", ct);
             return;
         }
+
+        if (schemaOnly)
+            resultSet = resultSet with { Rows = Array.Empty<object?[]>() };
 
         var w = new TdsWriter();
 
@@ -227,74 +248,213 @@ public sealed class TdsSession
                 w.WriteValue(resultSet.Columns[i], row[i]);
         }
 
+        writeExtraTokens?.Invoke(w);
         WriteDone(w, status: 0x10 /* DONE_COUNT */, rowCount: (ulong)resultSet.Rows.Count);
         await TdsPacketIo.WriteMessageAsync(_stream, TdsPacketType.TabularResult, w.ToArray(), ct);
     }
 
     /// <summary>
-    /// Minimal RPC support: recognizes sp_executesql (proc id 10) and executes its first
-    /// parameter (the statement text) through the normal SQL path. Parameters are ignored.
+    /// RPC support (TDS packet type 0x03): sp_executesql with typed parameter values, the
+    /// prepared-statement procedures (sp_prepare / sp_execute / sp_prepexec / sp_unprepare),
+    /// and sp_describe_first_result_set for schema discovery.
     /// </summary>
     private async Task HandleRpcAsync(byte[] payload, CancellationToken ct)
     {
+        RpcRequest request;
         try
         {
-            var pos = 0;
-            if (payload.Length >= 4)
-            {
-                var totalHeaderLength = BitConverter.ToUInt32(payload, 0);
-                if (totalHeaderLength <= payload.Length) pos = (int)totalHeaderLength;
-            }
-
-            var nameLength = BitConverter.ToUInt16(payload, pos);
-            pos += 2;
-            string procName;
-            if (nameLength == 0xFFFF)
-            {
-                var procId = BitConverter.ToUInt16(payload, pos);
-                pos += 2;
-                procName = procId == 10 ? "sp_executesql" : $"#proc{procId}";
-            }
-            else
-            {
-                procName = Encoding.Unicode.GetString(payload, pos, nameLength * 2);
-                pos += nameLength * 2;
-            }
-            pos += 2; // option flags
-
-            if (!procName.Equals("sp_executesql", StringComparison.OrdinalIgnoreCase))
-            {
-                await SendErrorResponseAsync($"Unsupported RPC procedure: {procName}", ct);
-                return;
-            }
-
-            // First parameter: B_VARCHAR name, status byte, TYPE_INFO (NVARCHAR), value.
-            var paramNameLen = payload[pos];
-            pos += 1 + paramNameLen * 2;
-            pos += 1; // status flags
-            var typeToken = payload[pos];
-            if (typeToken != 0xE7) // NVARCHARTYPE expected for the statement text
-            {
-                await SendErrorResponseAsync("Unsupported sp_executesql parameter encoding.", ct);
-                return;
-            }
-            pos += 1 + 2 + 5; // type token, max length, collation
-            var valueLength = BitConverter.ToUInt16(payload, pos);
-            pos += 2;
-            if (valueLength == 0xFFFF)
-            {
-                await SendErrorResponseAsync("sp_executesql statement was NULL.", ct);
-                return;
-            }
-
-            var sql = Encoding.Unicode.GetString(payload, pos, valueLength).Trim();
-            Console.WriteLine($"[rpc] sp_executesql: {sql}");
-            await ExecuteSqlAsync(sql, ct);
+            request = RpcParser.Parse(payload);
         }
-        catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
+        catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException or ArgumentException)
         {
             await SendErrorResponseAsync("Malformed RPC request.", ct);
+            return;
         }
+
+        var ps = request.Parameters;
+        switch (request.ProcName.ToLowerInvariant())
+        {
+            case "sp_executesql":
+            {
+                // ps[0] = statement, ps[1] = parameter declaration string, ps[2..] = values.
+                if (ps.Count == 0 || ps[0].Value is not string sql)
+                {
+                    await SendErrorResponseAsync("sp_executesql statement was missing or NULL.", ct);
+                    return;
+                }
+                var values = NamedValues(ps.Skip(2));
+                Console.WriteLine($"[rpc] sp_executesql: {sql.Trim()}{FormatParams(values)}");
+                await ExecuteSqlAsync(sql.Trim(), ct, values);
+                return;
+            }
+            case "sp_prepare":
+            {
+                // ps[0] = @handle OUT, ps[1] = parameter declaration, ps[2] = statement.
+                if (ps.Count < 3 || ps[2].Value is not string stmt)
+                {
+                    await SendErrorResponseAsync("sp_prepare statement was missing or NULL.", ct);
+                    return;
+                }
+                var handle = _nextPreparedHandle++;
+                _preparedStatements[handle] = stmt.Trim();
+                Console.WriteLine($"[rpc] sp_prepare handle={handle}: {stmt.Trim()}");
+
+                var w = new TdsWriter();
+                WriteReturnValueInt(w, ps[0].Name, handle);
+                WriteDone(w, status: 0x00, rowCount: 0);
+                await TdsPacketIo.WriteMessageAsync(_stream, TdsPacketType.TabularResult, w.ToArray(), ct);
+                return;
+            }
+            case "sp_prepexec":
+            {
+                // ps[0] = @handle OUT, ps[1] = parameter declaration, ps[2] = statement, ps[3..] = values.
+                if (ps.Count < 3 || ps[2].Value is not string stmt)
+                {
+                    await SendErrorResponseAsync("sp_prepexec statement was missing or NULL.", ct);
+                    return;
+                }
+                var handle = _nextPreparedHandle++;
+                _preparedStatements[handle] = stmt.Trim();
+                var values = NamedValues(ps.Skip(3));
+                Console.WriteLine($"[rpc] sp_prepexec handle={handle}: {stmt.Trim()}{FormatParams(values)}");
+                await ExecuteSqlAsync(stmt.Trim(), ct, values, w => WriteReturnValueInt(w, ps[0].Name, handle));
+                return;
+            }
+            case "sp_execute":
+            {
+                // ps[0] = @handle, ps[1..] = values.
+                if (ps.Count == 0 || ToInt(ps[0].Value) is not int handle ||
+                    !_preparedStatements.TryGetValue(handle, out var stmt))
+                {
+                    await SendErrorResponseAsync("sp_execute: unknown prepared statement handle.", ct);
+                    return;
+                }
+                var values = NamedValues(ps.Skip(1));
+                Console.WriteLine($"[rpc] sp_execute handle={handle}: {stmt}{FormatParams(values)}");
+                await ExecuteSqlAsync(stmt, ct, values);
+                return;
+            }
+            case "sp_unprepare":
+            {
+                if (ps.Count > 0 && ToInt(ps[0].Value) is int handle)
+                    _preparedStatements.Remove(handle);
+                var w = new TdsWriter();
+                WriteDone(w, status: 0x00, rowCount: 0);
+                await TdsPacketIo.WriteMessageAsync(_stream, TdsPacketType.TabularResult, w.ToArray(), ct);
+                return;
+            }
+            case "sp_describe_first_result_set":
+            {
+                if (ps.Count == 0 || ps[0].Value is not string tsql)
+                {
+                    await SendErrorResponseAsync("sp_describe_first_result_set: @tsql was missing or NULL.", ct);
+                    return;
+                }
+                Console.WriteLine($"[rpc] sp_describe_first_result_set: {tsql.Trim()}");
+                await HandleDescribeFirstResultSetAsync(tsql.Trim(), ct);
+                return;
+            }
+            default:
+                await SendErrorResponseAsync($"Unsupported RPC procedure: {request.ProcName}", ct);
+                return;
+        }
+    }
+
+    private static Dictionary<string, object?> NamedValues(IEnumerable<RpcParameter> parameters)
+    {
+        var values = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in parameters)
+            if (p.Name.Length > 0)
+                values[p.Name] = p.Value;
+        return values;
+    }
+
+    private static string FormatParams(Dictionary<string, object?> values) =>
+        values.Count == 0
+            ? ""
+            : " | " + string.Join(", ", values.Select(kv => $"{kv.Key}={MappingStore.ToSqlLiteral(kv.Value)}"));
+
+    private static int? ToInt(object? value) => value switch
+    {
+        int i => i,
+        long l => (int)l,
+        short s => s,
+        byte b => b,
+        _ => null,
+    };
+
+    /// <summary>Answers sp_describe_first_result_set by describing the columns of the mapped result set.</summary>
+    private async Task HandleDescribeFirstResultSetAsync(string tsql, CancellationToken ct)
+    {
+        var resultSet = _mappings.Lookup(SystemQueries.StripLeadingUse(tsql));
+        if (resultSet is null)
+        {
+            await SendErrorResponseAsync($"No mapping configured for statement: {tsql}", ct);
+            return;
+        }
+
+        ColumnDefinition NVarChar(string name, int len) => new(name, SqlTypeKind.NVarChar, len, 0, 0);
+        ColumnDefinition Int(string name) => new(name, SqlTypeKind.Int, 4, 0, 0);
+        ColumnDefinition Bit(string name) => new(name, SqlTypeKind.Bit, 1, 0, 0);
+
+        var columns = new[]
+        {
+            Bit("is_hidden"), Int("column_ordinal"), NVarChar("name", 128), Bit("is_nullable"),
+            Int("system_type_id"), NVarChar("system_type_name", 256),
+            Int("max_length"), Int("precision"), Int("scale"),
+        };
+
+        var rows = new List<object?[]>();
+        for (var i = 0; i < resultSet.Columns.Count; i++)
+        {
+            var col = resultSet.Columns[i];
+            var (typeId, typeName, maxLength) = col.Kind switch
+            {
+                SqlTypeKind.Int => (56, "int", 4),
+                SqlTypeKind.BigInt => (127, "bigint", 8),
+                SqlTypeKind.Bit => (104, "bit", 1),
+                SqlTypeKind.NVarChar => (231, $"nvarchar({col.Length})", col.Length * 2),
+                SqlTypeKind.Decimal => (106, $"decimal({col.Precision},{col.Scale})", 17),
+                SqlTypeKind.DateTime2 => (42, "datetime2", 8),
+                _ => (231, "nvarchar(max)", -1),
+            };
+            rows.Add(new object?[] { false, i + 1, col.Name, true, typeId, typeName, maxLength, (int)col.Precision, (int)col.Scale });
+        }
+
+        var describeResult = new ResultSet(columns, rows);
+        var w = new TdsWriter();
+        w.WriteByte(0x81);
+        w.WriteUInt16((ushort)describeResult.Columns.Count);
+        foreach (var col in describeResult.Columns)
+        {
+            w.WriteUInt32(0);
+            w.WriteUInt16(0x0001);
+            w.WriteTypeInfo(col);
+            w.WriteBVarChar(col.Name);
+        }
+        foreach (var row in describeResult.Rows)
+        {
+            w.WriteByte(0xD1);
+            for (var i = 0; i < describeResult.Columns.Count; i++)
+                w.WriteValue(describeResult.Columns[i], row[i]);
+        }
+        WriteDone(w, status: 0x10, rowCount: (ulong)describeResult.Rows.Count);
+        await TdsPacketIo.WriteMessageAsync(_stream, TdsPacketType.TabularResult, w.ToArray(), ct);
+    }
+
+    /// <summary>RETURNVALUE token (0xAC) carrying an INT output parameter (used for prepared statement handles).</summary>
+    private static void WriteReturnValueInt(TdsWriter w, string name, int value)
+    {
+        w.WriteByte(0xAC);
+        w.WriteUInt16(0);      // param ordinal
+        w.WriteBVarChar(name);
+        w.WriteByte(0x01);     // status: output parameter
+        w.WriteUInt32(0);      // user type
+        w.WriteUInt16(0x0001); // flags: nullable
+        w.WriteByte(0x26);     // INTN
+        w.WriteByte(4);
+        w.WriteByte(4);
+        w.WriteInt32(value);
     }
 
     private async Task SendErrorResponseAsync(string message, CancellationToken ct)

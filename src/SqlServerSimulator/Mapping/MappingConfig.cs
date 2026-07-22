@@ -90,6 +90,47 @@ public sealed class MappingStore
 
     public static string Normalize(string sql) => WhitespaceRun.Replace(sql, " ").Trim();
 
+    /// <summary>
+    /// Parameter-aware lookup: tries the raw statement text first (so mappings can be keyed on
+    /// the parameterized form, e.g. "... where x = @y"), then retries with each @parameter
+    /// replaced by its SQL literal value.
+    /// </summary>
+    public ResultSet? Lookup(string statement, IReadOnlyDictionary<string, object?>? parameters)
+    {
+        var rs = Lookup(statement);
+        if (rs is not null || parameters is null || parameters.Count == 0) return rs;
+        var substituted = SubstituteParameters(statement, parameters);
+        return substituted == statement ? null : Lookup(substituted);
+    }
+
+    /// <summary>Replaces @name references with SQL literal values (longest names first, so @p10 wins over @p1).</summary>
+    public static string SubstituteParameters(string sql, IReadOnlyDictionary<string, object?> parameters)
+    {
+        foreach (var (name, value) in parameters.OrderByDescending(p => p.Key.Length))
+        {
+            var paramName = name.StartsWith('@') ? name : "@" + name;
+            sql = Regex.Replace(
+                sql,
+                Regex.Escape(paramName) + @"(?![\w@$#])",
+                ToSqlLiteral(value).Replace("$", "$$"),
+                RegexOptions.IgnoreCase);
+        }
+        return sql;
+    }
+
+    public static string ToSqlLiteral(object? value) => value switch
+    {
+        null => "NULL",
+        string s => "N'" + s.Replace("'", "''") + "'",
+        bool b => b ? "1" : "0",
+        DateTime d => "'" + d.ToString(d.TimeOfDay == TimeSpan.Zero ? "yyyy-MM-dd" : "yyyy-MM-ddTHH:mm:ss.fffffff", System.Globalization.CultureInfo.InvariantCulture) + "'",
+        TimeSpan t => "'" + t.ToString(null, System.Globalization.CultureInfo.InvariantCulture) + "'",
+        Guid g => "'" + g + "'",
+        byte[] b => "0x" + Convert.ToHexString(b),
+        IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? "NULL",
+    };
+
     public ResultSet? Lookup(string statement)
     {
         var sql = Normalize(statement);
