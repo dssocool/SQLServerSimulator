@@ -237,9 +237,121 @@ public static class RpcParser
                 pos += len;
                 return v;
             }
+            case 0x62: // SSVARIANTTYPE (sql_variant)
+            {
+                pos += 4; // max length (DWORD)
+                var len = (int)BitConverter.ToUInt32(p, pos);
+                pos += 4;
+                if (len == 0) return null;
+                return ReadSqlVariant(p, ref pos, len);
+            }
             default:
                 throw new NotSupportedException($"RPC parameter type 0x{type:X2} is not supported.");
         }
+    }
+
+    /// <summary>Decodes a sql_variant value: base type byte, property bytes, then the data payload.</summary>
+    private static object? ReadSqlVariant(byte[] p, ref int pos, int totalLen)
+    {
+        var end = pos + totalLen;
+        var baseType = p[pos++];
+        var propBytes = p[pos++];
+        var propStart = pos;
+        pos += propBytes;
+        var dataStart = pos;
+        var dataLen = end - dataStart;
+
+        object? value;
+        switch (baseType)
+        {
+            case 0x30: value = p[dataStart]; break;                                   // tinyint
+            case 0x34: value = BitConverter.ToInt16(p, dataStart); break;             // smallint
+            case 0x38: value = BitConverter.ToInt32(p, dataStart); break;             // int
+            case 0x7F: value = BitConverter.ToInt64(p, dataStart); break;             // bigint
+            case 0x32: value = p[dataStart] != 0; break;                              // bit
+            case 0x3B: value = (double)BitConverter.ToSingle(p, dataStart); break;    // real
+            case 0x3E: value = BitConverter.ToDouble(p, dataStart); break;            // float
+            case 0x24: value = new Guid(p.AsSpan(dataStart, 16)); break;              // uniqueidentifier
+            case 0x7A: // smallmoney
+            {
+                value = BitConverter.ToInt32(p, dataStart) / 10000m;
+                break;
+            }
+            case 0x3C: // money
+            {
+                var hi = BitConverter.ToInt32(p, dataStart);
+                var lo = BitConverter.ToUInt32(p, dataStart + 4);
+                value = (((long)hi << 32) | lo) / 10000m;
+                break;
+            }
+            case 0x3A: // smalldatetime
+            {
+                value = new DateTime(1900, 1, 1)
+                    .AddDays(BitConverter.ToUInt16(p, dataStart))
+                    .AddMinutes(BitConverter.ToUInt16(p, dataStart + 2));
+                break;
+            }
+            case 0x3D: // datetime
+            {
+                var days = BitConverter.ToInt32(p, dataStart);
+                var thirds = BitConverter.ToUInt32(p, dataStart + 4);
+                value = new DateTime(1900, 1, 1).AddDays(days)
+                    .AddTicks((long)Math.Round(thirds * (10_000_000.0 / 300.0)));
+                break;
+            }
+            case 0x28: // date
+            {
+                var days = (int)ReadUIntLe(p, dataStart, 3);
+                value = new DateTime(1, 1, 1).AddDays(days);
+                break;
+            }
+            case 0x29: // time
+            {
+                var scale = p[propStart];
+                var time = ReadUIntLe(p, dataStart, dataLen);
+                value = TimeSpan.FromTicks((long)time * Pow10(7 - scale));
+                break;
+            }
+            case 0x2A: // datetime2
+            {
+                var scale = p[propStart];
+                var timeBytes = dataLen - 3;
+                var time = ReadUIntLe(p, dataStart, timeBytes);
+                var days = (int)ReadUIntLe(p, dataStart + timeBytes, 3);
+                value = new DateTime(1, 1, 1).AddDays(days).AddTicks((long)time * Pow10(7 - scale));
+                break;
+            }
+            case 0x6A: // decimal
+            case 0x6C: // numeric
+            {
+                var scale = p[propStart + 1];
+                var sign = p[dataStart];
+                var magnitude = new System.Numerics.BigInteger(
+                    p.AsSpan(dataStart + 1, dataLen - 1), isUnsigned: true, isBigEndian: false);
+                var dec = (decimal)magnitude;
+                for (var i = 0; i < scale; i++) dec /= 10m;
+                value = sign == 1 ? dec : -dec;
+                break;
+            }
+            case 0xA7: // varchar
+            case 0xAF: // char
+                value = Encoding.Latin1.GetString(p, dataStart, dataLen);
+                break;
+            case 0xE7: // nvarchar
+            case 0xEF: // nchar
+                value = Encoding.Unicode.GetString(p, dataStart, dataLen);
+                break;
+            case 0xA5: // varbinary
+            case 0xAD: // binary
+                value = p.AsSpan(dataStart, dataLen).ToArray();
+                break;
+            default:
+                value = p.AsSpan(dataStart, dataLen).ToArray();
+                break;
+        }
+
+        pos = end;
+        return value;
     }
 
     /// <summary>Reads a US_VARBYTE value, or a PLP-encoded value when the declared max length is 0xFFFF ("max" types).</summary>
