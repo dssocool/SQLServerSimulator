@@ -19,7 +19,7 @@ A minimal TDS-protocol server (.NET 10) that looks like a real SQL Server to cli
 dotnet run --project src/SqlServerSimulator [path/to/mappings.json] [port] [bindAddress]
 ```
 
-Defaults: `mappings/mappings.json` (copied next to the binary), port `11433`, and bind address `0.0.0.0` (all network interfaces). Use `127.0.0.1` as the bind address to accept only local connections.
+Defaults: `mappings/mappings.json` (copied next to the binary), port `11433`, and bind address `0.0.0.0` (all network interfaces). Use `127.0.0.1` as the bind address to accept only local connections. Copy `mappings/mappings.example.json` to `mappings/mappings.json` before the first run (the local file is gitignored).
 
 Example connection string:
 
@@ -31,7 +31,7 @@ Server=127.0.0.1,11433;User Id=anyone;Password=whatever;Encrypt=True;TrustServer
 
 ## Mapping config
 
-`mappings/mappings.json` maps a statement to a CSV file (path relative to the config file) plus column types:
+Copy `mappings/mappings.example.json` to `mappings/mappings.json` and edit the local file. It maps a statement to a CSV file (path relative to the config file) plus column types:
 
 ```json
 {

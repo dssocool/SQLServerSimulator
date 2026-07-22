@@ -10,7 +10,7 @@ public sealed class SimulatorTests : IAsyncLifetime
 
     public Task InitializeAsync()
     {
-        var configPath = Path.Combine(AppContext.BaseDirectory, "mappings", "mappings.json");
+        var configPath = Path.Combine(AppContext.BaseDirectory, "mappings", "mappings.example.json");
         _server = new SimulatorServer(MappingConfig.Load(configPath), port: 0);
         _server.Start();
         return Task.CompletedTask;

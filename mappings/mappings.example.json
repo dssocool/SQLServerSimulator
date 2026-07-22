@@ -1,0 +1,66 @@
+{
+  "mappings": [
+    {
+      "statement": "SELECT Id, Name, Price FROM Products",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "sqlFile": "products.sql",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "statement": "SELECT Id, Name, Price FROM Products WHERE Id = @ProductId",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "statement": "SELECT Id, Name, Price FROM Products WHERE Id = @Id AND Name = @Name AND CreatedAt > @Since",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "statement": "SELECT Id, Name, Price FROM Products WHERE Name = N'Keyboard'",
+      "csvFile": "products.csv",
+      "columns": [
+        { "name": "Id", "type": "int" },
+        { "name": "Name", "type": "nvarchar(50)" },
+        { "name": "Price", "type": "decimal(10,2)" }
+      ]
+    },
+    {
+      "statementPattern": "from\\s+\\[?sys\\]?\\.\\[?databases\\]?",
+      "csvFile": "databases.csv",
+      "columns": [
+        { "name": "Name", "type": "nvarchar(128)" }
+      ]
+    },
+    {
+      "statementPattern": "from\\s+\\[?INFORMATION_SCHEMA\\]?\\.\\[?TABLES\\]?|join\\s+\\[?sys\\]?\\.\\[?schemas\\]?",
+      "csvFile": "tables.csv",
+      "columns": [
+        { "name": "TABLE_CATALOG", "type": "nvarchar(128)" },
+        { "name": "TABLE_SCHEMA", "type": "nvarchar(128)" },
+        { "name": "TABLE_NAME", "type": "nvarchar(128)" },
+        { "name": "TABLE_TYPE", "type": "nvarchar(32)" }
+      ]
+    }
+  ]
+}

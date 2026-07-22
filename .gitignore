@@ -64,4 +64,7 @@ $RECYCLE.BIN/
 appsettings.Development.json
 secrets.json
 
+## Local mapping config (copy from mappings/mappings.example.json)
+mappings/mappings.json
+
 .build-test
